@@ -32,6 +32,7 @@ repositories {
 }
 
 dependencies {
+    implementation("org.json:json:20230618")
     implementation("io.ktor:ktor-server-core-jvm:$ktor_version")
     implementation("io.ktor:ktor-server-host-common-jvm:$ktor_version")
     implementation("io.ktor:ktor-server-status-pages-jvm:$ktor_version")

@@ -2,7 +2,6 @@ package com.graphscout.plugins
 
 import com.graphscout.GatewayApplicationConfig
 import io.ktor.client.*
-import io.ktor.client.engine.*
 import io.ktor.client.engine.cio.*
 import io.ktor.client.plugins.*
 import io.ktor.client.plugins.contentnegotiation.*
@@ -20,7 +19,7 @@ import io.ktor.util.*
 import io.ktor.util.pipeline.*
 import kotlinx.serialization.json.Json
 
-val upstreamApps = GatewayApplicationConfig.loadApps()
+val upstreamApps = GatewayApplicationConfig.loadUpstreams()
 
 fun Application.configureRouting() {
 
@@ -45,46 +44,45 @@ fun Application.configureRouting() {
     }
 }
 
-@OptIn(InternalAPI::class)
 private suspend fun processRequest(context: PipelineContext<Unit, ApplicationCall>) {
     val inboundRequest = context.call.request
     val uri = inboundRequest.uri
 
     upstreamApps.forEach {
-        if (uri.startsWith("/${it.listen}")) {
+        val client = acquireClient()
+        val requestHeaders = inboundRequest.headers
+        val fwdUri = it.url
 
-            val client = acquireClient()
-            val requestHeaders = inboundRequest.headers
-            val fwdUri = "${it.upstream}"//${uri.drop(it.listen.length+1)}"
+        println("${inboundRequest.httpMethod}\n${inboundRequest.uri}")
 
-            println(inboundRequest)
-            val httpResponse = when (inboundRequest.httpMethod) {
-                HttpMethod.Get      -> { client.get(fwdUri) { headers { headerMagic(this, requestHeaders) } } }
-                HttpMethod.Post     -> { client.post(fwdUri) {
-                    headers { headerMagic(this, requestHeaders) }
-                    body = context.call.receiveText()
-                    println(body)
+        val httpResponse = when (inboundRequest.httpMethod) {
+            HttpMethod.Get      -> { client.get(fwdUri) { headers { manipulateHeader(this, requestHeaders) } } }
+            HttpMethod.Post     -> {
+                val requestBody = context.call.receiveText()
+                val json = org.json.JSONObject(requestBody)
+                println(json)
+                client.post(fwdUri) {
+                    headers { manipulateHeader(this, requestHeaders) }
+                    setBody(requestBody)
                     }
-                }
-                HttpMethod.Put      -> { client.put(fwdUri) { headers { headerMagic(this, requestHeaders) } } }
-                HttpMethod.Delete   -> { client.delete(fwdUri) { headers { headerMagic(this, requestHeaders) } } }
-                HttpMethod.Patch    -> { client.patch(fwdUri) { headers { headerMagic(this, requestHeaders) } } }
-                HttpMethod.Head     -> { client.head(fwdUri) { headers { headerMagic(this, requestHeaders) } } }
-                HttpMethod.Options  -> { client.options(fwdUri) { headers { headerMagic(this, requestHeaders) } } }
-                else -> { throw Exception("The End is near!") }
             }
-
-            println("->${httpResponse.bodyAsText()}<-")
-            context.call.respond(httpResponse.status, httpResponse.bodyAsText())
+            HttpMethod.Put      -> { client.put(fwdUri) { headers { manipulateHeader(this, requestHeaders) } } }
+            HttpMethod.Delete   -> { client.delete(fwdUri) { headers { manipulateHeader(this, requestHeaders) } } }
+            HttpMethod.Patch    -> { client.patch(fwdUri) { headers { manipulateHeader(this, requestHeaders) } } }
+            HttpMethod.Head     -> { client.head(fwdUri) { headers { manipulateHeader(this, requestHeaders) } } }
+            HttpMethod.Options  -> { client.options(fwdUri) { headers { manipulateHeader(this, requestHeaders) } } }
+            else -> { throw Exception("The End is near!") }
         }
+
+        println("->${httpResponse.bodyAsText()}<-")
+        context.call.respond(httpResponse.status, httpResponse.bodyAsText())
     }
     context.call.respond(HttpStatusCode.OK, "You Shall Not Pass: '${uri}'\n")
 }
 
-private fun headerMagic(headerBuilder : HeadersBuilder, hdrs:Headers) {
+private fun manipulateHeader(headerBuilder : HeadersBuilder, hdrs:Headers) {
     hdrs.forEach { headername, valueList -> headerBuilder.appendAll(headername, valueList) }
     headerBuilder.remove("Host")
-    //headerBuilder["Hello2"] = "${hdrs["Hello"]} and Instructure"
 }
 
 fun acquireClient(): HttpClient {
