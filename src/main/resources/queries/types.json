@@ -1,4 +1,3 @@
 {
   "query": "query TypeQuery { __schema { types { ...FullType } } } fragment FullType on __Type { kind name }"
 }
-

@@ -1,14 +1,15 @@
 package com.graphscout.plugins
 
-import com.graphscout.GatewayApplicationConfig
-import io.ktor.client.*
+import com.graphscout.data.RequestMetaInfo
+import com.graphscout.plugins.util.GSResponse
+import com.graphscout.plugins.util.GatewayApplicationConfig
+import com.graphscout.plugins.util.WebClient
+import com.graphscout.plugins.util.GraphQLUtils
+import com.graphscout.service.RequestVault
 import io.ktor.client.engine.cio.*
-import io.ktor.client.plugins.*
-import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
-import io.ktor.serialization.kotlinx.json.*
 import io.ktor.server.application.*
 import io.ktor.server.engine.*
 import io.ktor.server.plugins.statuspages.*
@@ -17,7 +18,7 @@ import io.ktor.server.routing.*
 import io.ktor.server.request.*
 import io.ktor.util.*
 import io.ktor.util.pipeline.*
-import kotlinx.serialization.json.Json
+import org.json.JSONObject
 
 val upstreamApps = GatewayApplicationConfig.loadUpstreams()
 
@@ -46,59 +47,55 @@ fun Application.configureRouting() {
 
 private suspend fun processRequest(context: PipelineContext<Unit, ApplicationCall>) {
     val inboundRequest = context.call.request
-    val uri = inboundRequest.uri
+    val rsp = when (inboundRequest.httpMethod) {
+        HttpMethod.Post     -> {
+            RequestVault.add(RequestMetaInfo(inboundRequest.hashCode()))
+            processGraphqlRequest(inboundRequest)
+        }
+        else -> { throw Exception("Method not implemented yet (${inboundRequest.httpMethod})") }
+    }
+    context.call.respond(rsp.response.status, rsp.body)
+    RequestVault.delete(inboundRequest.hashCode())
+}
 
-    upstreamApps.forEach {
-        val client = acquireClient()
-        val requestHeaders = inboundRequest.headers
-        val fwdUri = it.url
+@OptIn(InternalAPI::class)
+private suspend fun processGraphqlRequest(request : ApplicationRequest): GSResponse {
+    val queryInJsonFormat = GraphQLUtils.makeRequestOfficial(request.call.receiveText())
+    GraphQLUtils.gatherAliasesFromRequestAndPutInTheRequestVault(request.hashCode(), queryInJsonFormat)
 
-        println("${inboundRequest.httpMethod}\n${inboundRequest.uri}")
-
-        val httpResponse = when (inboundRequest.httpMethod) {
-            HttpMethod.Get      -> { client.get(fwdUri) { headers { manipulateHeader(this, requestHeaders) } } }
-            HttpMethod.Post     -> {
-                val requestBody = context.call.receiveText()
-                val json = org.json.JSONObject(requestBody)
-                println(json)
-                client.post(fwdUri) {
-                    headers { manipulateHeader(this, requestHeaders) }
-                    setBody(requestBody)
-                    }
+    val matchingUpstreams = upstreamApps.filter { it.hasQueryType(GraphQLUtils.getFirstTypeName(queryInJsonFormat)) }
+    if( matchingUpstreams.isEmpty()) {
+        // Assuming it is an Introspection query
+        val r = callServer(upstreamApps[0].url, queryInJsonFormat.toString(), request)
+        return GSResponse(r, r.bodyAsText()) // TODO: Upstream APIs schema merge :)
+    } else {
+        val baseHttpResponse = callServer(matchingUpstreams[0].url, queryInJsonFormat.toString(), request)
+        var resultBody = JSONObject(baseHttpResponse.bodyAsText())
+        RequestVault.get(request.hashCode())?.aliases?.forEach { alias ->
+            GraphQLUtils.findKeyValues(resultBody, alias.name,).distinct().forEach { aliasValue ->
+                resultBody = GraphQLUtils.replaceKeyWithValue(
+                    resultBody,
+                    alias.name,
+                    aliasValue,
+                    GraphQLUtils.getValuableSegment(
+                        JSONObject(
+                            callServer("http://localhost:${GatewayApplicationConfig.getPropertyAsInt("graphscout.application.port")}",
+                        alias.expression.replace("$", aliasValue), request).bodyAsText()))!!)
             }
-            HttpMethod.Put      -> { client.put(fwdUri) { headers { manipulateHeader(this, requestHeaders) } } }
-            HttpMethod.Delete   -> { client.delete(fwdUri) { headers { manipulateHeader(this, requestHeaders) } } }
-            HttpMethod.Patch    -> { client.patch(fwdUri) { headers { manipulateHeader(this, requestHeaders) } } }
-            HttpMethod.Head     -> { client.head(fwdUri) { headers { manipulateHeader(this, requestHeaders) } } }
-            HttpMethod.Options  -> { client.options(fwdUri) { headers { manipulateHeader(this, requestHeaders) } } }
-            else -> { throw Exception("The End is near!") }
         }
-
-        println("->${httpResponse.bodyAsText()}<-")
-        context.call.respond(httpResponse.status, httpResponse.bodyAsText())
-    }
-    context.call.respond(HttpStatusCode.OK, "You Shall Not Pass: '${uri}'\n")
-}
-
-private fun manipulateHeader(headerBuilder : HeadersBuilder, hdrs:Headers) {
-    hdrs.forEach { headername, valueList -> headerBuilder.appendAll(headername, valueList) }
-    headerBuilder.remove("Host")
-}
-
-fun acquireClient(): HttpClient {
-    return HttpClient(CIO) {
-        followRedirects = true
-        install(HttpTimeout) {
-            requestTimeoutMillis = 2000
-        }
-        install(ContentNegotiation) {
-            json(Json {
-                prettyPrint = true
-                isLenient = true
-            })
-        }
+        return GSResponse(baseHttpResponse, resultBody.toString())
     }
 }
 
+suspend fun callServer(url: String, body: String, request : ApplicationRequest) : HttpResponse {
+    return if (body.startsWith("http")) {
+        WebClient.getJsonClient<CIO>(10000).get(body)
+    } else {
+        WebClient.getJsonClient<CIO>(10000).post(url) {
+            headers { GraphQLUtils.manipulateHeader(this, request.headers, body.length) }
+            setBody(body)
+        }
+    }
+}
 class AuthenticationException : RuntimeException()
 class AuthorizationException : RuntimeException()

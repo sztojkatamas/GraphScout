@@ -4,6 +4,7 @@ import com.graphscout.plugins.configureHTTP
 import com.graphscout.plugins.configureRouting
 import com.graphscout.plugins.configureSecurity
 import com.graphscout.plugins.configureSerialization
+import com.graphscout.plugins.util.GatewayApplicationConfig
 import io.ktor.server.engine.*
 import io.ktor.server.netty.*
 
