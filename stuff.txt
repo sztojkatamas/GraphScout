@@ -1,0 +1,70 @@
+https://api.react-finland.fi/graphql
+query queryConferences{
+		conferences {
+			locations {
+				city
+				country {code}
+		}
+	}
+}
+
+
+
+https://spacex-production.up.railway.app/
+query {
+	company {
+		name
+		ceo
+		coo
+		cto
+	}
+}
+
+
+https://countries.trevorblades.com/
+query Hajaj{
+	country(code: "HU") {
+		code
+		name
+		capital
+		emoji
+	}
+}
+
+
+
+
+http://localhost:9876/
+# var fromGrapQL=query {country(code: "$") {code name capital continent {name} emoji currencies languages { name native}}}
+
+# alias fromREST=https://restcountries.com/v3.1/alpha/$?fields=name,capital,flag
+
+query Valami {
+	conference(id: "freezing-edge-2020") {
+		id
+		locations {
+			name
+			country {
+				name
+				fromREST: code
+				fromGrapQL: code
+			}
+		}
+	}
+}
+
+
+
+
+# var label1=query{country(code:"$"){code name capital emoji}}
+# alias label2=https://restcountries.com/v3.1/alpha/$?fields=flag
+query queryConferences {
+	conferences {
+		locations {
+			city
+			country {
+				label1: code
+			}
+		}
+	}
+}
